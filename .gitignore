@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+
+# Environment variables
+.env
+
+# Streamlit
+.streamlit/
+
+# Data artifacts (generated at runtime)
+data/
+!data/.gitkeep
+
+# Vector indexes & embeddings
+*.npy
+*.npz
+*.pkl
+*.bin
+
+# OS
+.DS_Store
