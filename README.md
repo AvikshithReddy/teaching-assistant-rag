@@ -12,7 +12,7 @@ Built using Retrieval-Augmented Generation (RAG) with hybrid retrieval, per-stud
 	•	Create and manage multiple courses
 	•	Upload PDFs and PPTX course materials
 	•	Automatic duplicate file detection
-	•	Build / rebuild vector indexes
+	•	Build/rebuild vector indexes
 	•	Inspect indexed chunks for transparency
 	•	Delete materials and courses safely
 
@@ -97,3 +97,4 @@ OPENAI_MODEL_NAME=gpt-4o-mini   # or any supported model
 
 
 streamlit run main_app.py
+
