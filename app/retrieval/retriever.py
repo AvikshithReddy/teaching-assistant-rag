@@ -1,12 +1,11 @@
 # app/retrieval/retriever.py
 from __future__ import annotations
 
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Any, Optional
 import re
 
 import numpy as np
 import pandas as pd
-from scipy import sparse
 import joblib
 import faiss
 from sentence_transformers import SentenceTransformer
@@ -17,13 +16,26 @@ try:
 except Exception:  # noqa: BLE001
     st = None
 
-from app.config import EMBEDDING_MODEL_NAME, get_course_paths
-from app.ingestion.preprocess import preprocess_for_tfidf
+from app.config import (
+    EMBEDDING_MODEL_NAME,
+    get_course_paths,
+    FUSION_METHOD,
+    RRF_K,
+    BM25_WEIGHT,
+    VECTOR_WEIGHT,
+    MIN_VECTOR_SIM,
+    MIN_BM25_SCORE,
+    MIN_HYBRID_SCORE,
+    RAG_STORAGE_BACKEND,
+)
+from app.ingestion.preprocess import tokenize
+from app.retrieval.postgres_backend import retrieve_hybrid_postgres
 
 
 # -----------------------------
 # Streamlit caching wrappers
 # -----------------------------
+
 def _cache_resource(func):
     if st is None:
         return func
@@ -42,20 +54,18 @@ def _get_embedding_model() -> SentenceTransformer:
 
 
 @_cache_data
-def _load_tfidf_components_cached(prof_id: str, course_id: str):
+def _load_bm25_components_cached(prof_id: str, course_id: str):
     paths = get_course_paths(prof_id, course_id)
 
     if (
-        not paths["tfidf_model"].exists()
-        or not paths["tfidf_matrix"].exists()
+        not paths["bm25_model"].exists()
         or not paths["chunks_csv"].exists()
     ):
-        raise FileNotFoundError("TF-IDF index not built for this course.")
+        raise FileNotFoundError("BM25 index not built for this course.")
 
-    vectorizer = joblib.load(paths["tfidf_model"])
-    tfidf_matrix = sparse.load_npz(paths["tfidf_matrix"])
+    bm25 = joblib.load(paths["bm25_model"])
     df = pd.read_csv(paths["chunks_csv"])
-    return vectorizer, tfidf_matrix, df
+    return bm25, df
 
 
 @_cache_data
@@ -84,23 +94,25 @@ def _safe_norm(x: np.ndarray) -> np.ndarray:
     return x / (m + 1e-9)
 
 
-def _keyword_boost(df: pd.DataFrame, question: str) -> np.ndarray:
-    if df.empty:
-        return np.zeros(0, dtype="float32")
+def _apply_filters(df: pd.DataFrame, filters: Optional[Dict[str, Any]]) -> np.ndarray:
+    if df.empty or not filters:
+        return np.ones(len(df), dtype=bool)
+    mask = np.ones(len(df), dtype=bool)
+    for k, v in filters.items():
+        if k not in df.columns:
+            continue
+        if isinstance(v, (list, tuple, set)):
+            mask &= df[k].astype(str).isin([str(x) for x in v]).to_numpy()
+        else:
+            mask &= (df[k].astype(str) == str(v)).to_numpy()
+    return mask
 
-    text_series = df["chunk_text"].fillna("").str.lower()
-    tokens = re.findall(r"\b\w+\b", question.lower())
-    tokens = sorted({t for t in tokens if len(t) > 3})
 
-    boost = np.zeros(len(df), dtype="float32")
-    for kw in tokens:
-        mask = text_series.str.contains(rf"\b{re.escape(kw)}\b", regex=True)
-        if mask.any():
-            boost[mask.to_numpy()] += 1.0
-
-    if boost.max() > 0:
-        boost = boost / (boost.max() + 1e-9) * 0.5
-    return boost.astype("float32")
+def _rrf_scores(order: np.ndarray, k: int) -> np.ndarray:
+    scores = np.zeros(len(order), dtype="float32")
+    for rank, idx in enumerate(order, start=1):
+        scores[idx] = 1.0 / (k + rank)
+    return scores
 
 
 def keyword_fallback(prof_id: str, course_id: str, question: str, max_hits: int = 5) -> List[Dict]:
@@ -125,11 +137,16 @@ def keyword_fallback(prof_id: str, course_id: str, question: str, max_hits: int 
             hits.append(
                 {
                     "score": 1.0,
-                    "course_id": row["course_id"],
-                    "doc_name": row["doc_name"],
-                    "source_type": row["source_type"],
-                    "page_or_slide": int(row["page_or_slide"]),
-                    "chunk_text": row["chunk_text"],
+                    "chunk_id": row.get("chunk_id", ""),
+                    "course_id": row.get("course_id", ""),
+                    "doc_name": row.get("doc_name", ""),
+                    "source_type": row.get("source_type", ""),
+                    "page_or_slide": int(row.get("page_or_slide", 0)),
+                    "section_title": row.get("section_title", ""),
+                    "chunk_text": row.get("chunk_text", ""),
+                    "chunk_summary": row.get("chunk_summary", ""),
+                    "chunk_keywords": row.get("chunk_keywords", ""),
+                    "chunk_questions": row.get("chunk_questions", ""),
                 }
             )
 
@@ -151,29 +168,45 @@ def retrieve_hybrid(
     prof_id: str,
     course_id: str,
     top_k: int = 8,
-    tfidf_weight: float = 0.5,
-    use_keyword_boost: bool = True,
+    filters: Optional[Dict[str, Any]] = None,
 ) -> List[Dict]:
+    # Optional Postgres backend
+    if RAG_STORAGE_BACKEND == "postgres":
+        try:
+            model = _get_embedding_model()
+            q_emb = model.encode([query], normalize_embeddings=True)
+            q_emb = np.asarray(q_emb, dtype="float32")[0]
+            results = retrieve_hybrid_postgres(
+                query=query,
+                query_emb=q_emb,
+                prof_id=prof_id,
+                course_id=course_id,
+                top_k=top_k,
+            )
+            if results:
+                return results
+        except Exception:
+            pass
+
     try:
-        vectorizer, tfidf_matrix, df_tfidf = _load_tfidf_components_cached(prof_id, course_id)
+        bm25, df = _load_bm25_components_cached(prof_id, course_id)
         df_emb, _embeddings, faiss_index = _load_embedding_components_cached(prof_id, course_id)
     except FileNotFoundError:
         return []
 
-    if df_tfidf.empty:
+    if df.empty:
         return []
 
-    # TF-IDF
-    pre_q = preprocess_for_tfidf(query)
-    q_vec = vectorizer.transform([pre_q])
-    tfidf_scores = (q_vec @ tfidf_matrix.T).toarray().flatten()
+    # BM25
+    tokens = tokenize(query)
+    bm25_scores = np.asarray(bm25.get_scores(tokens), dtype="float32")
 
     # Embeddings (FAISS)
     model = _get_embedding_model()
     q_emb = model.encode([query], normalize_embeddings=True)
     q_emb = np.asarray(q_emb, dtype="float32")
 
-    k_candidates = min(max(top_k * 3, top_k), len(df_emb))
+    k_candidates = min(max(top_k * 5, top_k), len(df_emb))
     if k_candidates <= 0:
         return []
 
@@ -182,28 +215,49 @@ def retrieve_hybrid(
     for rank, idx in enumerate(idxs[0]):
         emb_scores[idx] = float(scores[0][rank])
 
-    tfidf_norm = _safe_norm(tfidf_scores.astype("float32"))
-    emb_norm = _safe_norm(emb_scores)
+    # Apply basic thresholds
+    bm25_scores[bm25_scores < MIN_BM25_SCORE] = 0.0
+    emb_scores[emb_scores < MIN_VECTOR_SIM] = 0.0
 
-    hybrid_scores = tfidf_weight * tfidf_norm + (1.0 - tfidf_weight) * emb_norm
-    if use_keyword_boost:
-        hybrid_scores += _keyword_boost(df_tfidf, query)
+    # Apply filters
+    mask = _apply_filters(df, filters)
+    bm25_scores = bm25_scores * mask
+    emb_scores = emb_scores * mask
+
+    if FUSION_METHOD == "rrf":
+        bm25_order = np.argsort(bm25_scores)[::-1]
+        emb_order = np.argsort(emb_scores)[::-1]
+        rrf_bm25 = _rrf_scores(bm25_order, RRF_K)
+        rrf_emb = _rrf_scores(emb_order, RRF_K)
+        hybrid_scores = BM25_WEIGHT * rrf_bm25 + VECTOR_WEIGHT * rrf_emb
+    else:
+        bm25_norm = _safe_norm(bm25_scores)
+        emb_norm = _safe_norm(emb_scores)
+        hybrid_scores = BM25_WEIGHT * bm25_norm + VECTOR_WEIGHT * emb_norm
 
     top_indices = np.argsort(hybrid_scores)[::-1]
     results: List[Dict] = []
     for idx in top_indices:
         score = float(hybrid_scores[idx])
-        if score <= 0:
+        if score < MIN_HYBRID_SCORE:
             continue
-        row = df_tfidf.iloc[idx]
+        row = df.iloc[idx]
         results.append(
             {
                 "score": score,
-                "course_id": row["course_id"],
-                "doc_name": row["doc_name"],
-                "source_type": row["source_type"],
-                "page_or_slide": int(row["page_or_slide"]),
-                "chunk_text": row["chunk_text"],
+                "bm25_score": float(bm25_scores[idx]),
+                "vector_sim": float(emb_scores[idx]),
+                "chunk_id": row.get("chunk_id", ""),
+                "course_id": row.get("course_id", ""),
+                "doc_name": row.get("doc_name", ""),
+                "source_type": row.get("source_type", ""),
+                "page_or_slide": int(row.get("page_or_slide", 0)),
+                "section_title": row.get("section_title", ""),
+                "chunk_text": row.get("chunk_text", ""),
+                "chunk_summary": row.get("chunk_summary", ""),
+                "chunk_keywords": row.get("chunk_keywords", ""),
+                "chunk_questions": row.get("chunk_questions", ""),
+                "chunk_len_tokens": int(row.get("chunk_len_tokens", 0) or 0),
             }
         )
         if len(results) >= top_k:

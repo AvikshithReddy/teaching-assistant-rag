@@ -18,11 +18,12 @@ from app.config import CHAT_LOGS_CSV_PATH, EMBEDDING_MODEL_NAME
 
 def _load_chat_df() -> pd.DataFrame:
     """Return full chat log (all students / courses)."""
-    if CHAT_LOGS_PATH.exists():
-        return pd.read_csv(CHAT_LOGS_PATH)
+    if CHAT_LOGS_CSV_PATH.exists():
+        return pd.read_csv(CHAT_LOGS_CSV_PATH)
     return pd.DataFrame(
         columns=[
             "timestamp",
+            "prof_id",
             "student_id",
             "course_id",
             "question",
@@ -33,14 +34,15 @@ def _load_chat_df() -> pd.DataFrame:
 
 
 def _save_chat_df(df: pd.DataFrame) -> None:
-    CHAT_LOGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(CHAT_LOGS_PATH, index=False)
+    CHAT_LOGS_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(CHAT_LOGS_CSV_PATH, index=False)
 
 
 # ---------- Public: logging ----------
 
 def log_interaction(
     *,
+    prof_id: Optional[str],
     student_id: Optional[str],
     course_id: Optional[str],
     question: str,
@@ -52,7 +54,7 @@ def log_interaction(
 
     If student_id or course_id is missing (e.g., professor testing), we skip logging.
     """
-    if not student_id or not course_id:
+    if not student_id or not course_id or not prof_id:
         return
 
     df = _load_chat_df()
@@ -60,6 +62,7 @@ def log_interaction(
     ts = dt.datetime.utcnow().isoformat()
     row = {
         "timestamp": ts,
+        "prof_id": str(prof_id),
         "student_id": str(student_id),
         "course_id": str(course_id),
         "question": question,
@@ -83,6 +86,7 @@ def _get_st_model() -> SentenceTransformer:
 
 def get_relevant_qa_snippets(
     question: str,
+    prof_id: Optional[str],
     course_id: Optional[str],
     top_k: int = 3,
 ) -> List[str]:
@@ -93,14 +97,14 @@ def get_relevant_qa_snippets(
 
     This makes the assistant "learn" from prior chats.
     """
-    if not course_id:
+    if not course_id or not prof_id:
         return []
 
     df = _load_chat_df()
     if df.empty:
         return []
 
-    df_course = df[df["course_id"] == str(course_id)]
+    df_course = df[(df["course_id"] == str(course_id)) & (df["prof_id"] == str(prof_id))]
     if df_course.empty:
         return []
 
@@ -134,6 +138,5 @@ def get_relevant_qa_snippets(
         snippets.append(snippet)
 
     return snippets
-
 
 

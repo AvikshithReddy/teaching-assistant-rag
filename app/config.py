@@ -25,12 +25,31 @@ for d in (DATA_DIR, DATA_RAW_DIR, DATA_PROCESSED_DIR, DATA_INDEX_ROOT):
 # Model settings
 # -------------------------------
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL_NAME = os.getenv("OPENAI_MODEL_NAME", "gpt-4o-mini")
 
-CHUNK_SIZE = 400
-CHUNK_OVERLAP = 80
+# Approximate token-based chunking (word count proxy)
+CHUNK_SIZE_TOKENS = int(os.getenv("CHUNK_SIZE_TOKENS", "420"))
+CHUNK_OVERLAP_TOKENS = int(os.getenv("CHUNK_OVERLAP_TOKENS", "70"))
+MAX_CHUNK_TOKENS = int(os.getenv("MAX_CHUNK_TOKENS", "520"))
+
+# Retrieval / fusion
+FUSION_METHOD = os.getenv("FUSION_METHOD", "rrf")  # "rrf" or "weighted"
+RRF_K = int(os.getenv("RRF_K", "60"))
+BM25_WEIGHT = float(os.getenv("BM25_WEIGHT", "0.45"))
+VECTOR_WEIGHT = float(os.getenv("VECTOR_WEIGHT", "0.55"))
+
+# Similarity thresholds / gating
+MIN_VECTOR_SIM = float(os.getenv("MIN_VECTOR_SIM", "0.20"))
+MIN_BM25_SCORE = float(os.getenv("MIN_BM25_SCORE", "0.10"))
+MIN_HYBRID_SCORE = float(os.getenv("MIN_HYBRID_SCORE", "0.10"))
+
+# Storage backend: "local" or "postgres"
+RAG_STORAGE_BACKEND = os.getenv("RAG_STORAGE_BACKEND", "local").lower()
+PG_DSN = os.getenv("PG_DSN", "")
+PG_SCHEMA = os.getenv("PG_SCHEMA", "rag")
 
 # -------------------------------
 # Safe ID handling
@@ -56,6 +75,7 @@ def get_course_paths(prof_id: Any, course_id: Any) -> dict:
         "index_dir": base,
         "tfidf_model": base / "tfidf_vectorizer.pkl",
         "tfidf_matrix": base / "tfidf_matrix.npz",
+        "bm25_model": base / "bm25.pkl",
         "chunks_csv": base / "chunks_metadata.csv",
         "embeddings_matrix": base / "embeddings.npy",
         "faiss_index": base / "faiss_index.bin",
@@ -73,5 +93,3 @@ def get_student_chat_path(prof_id: Any, course_id: Any, student_id: Any) -> Path
 # -------------------------------
 COURSES_CSV_PATH = DATA_DIR / "courses.csv"
 CHAT_LOGS_CSV_PATH = DATA_DIR / "chat_logs.csv"
-
-

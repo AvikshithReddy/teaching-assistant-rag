@@ -14,11 +14,15 @@ from app.config import (
     get_course_index_dir,
     get_course_paths,
     _safe_id,
+    RAG_STORAGE_BACKEND,
 )
 
 from app.ingestion.pdf_loader import load_pdf
 from app.ingestion.pptx_loader import load_pptx
-from app.nlp.tfidf_index import chunk_text, build_tfidf_index
+from app.ingestion.structure import parse_text_to_blocks
+from app.ingestion.chunking import chunk_blocks
+from app.nlp.tfidf_index import build_tfidf_index
+from app.nlp.bm25_index import build_bm25_index
 from app.nlp.embeddings_index import build_embeddings_index
 from app.qa.rag_pipeline import answer_question
 from app.qa.chat_memory import load_chat_history  # ✅ needed for student portal
@@ -120,6 +124,14 @@ def delete_course(prof_id: str, course_id: str) -> None:
             )
         ].copy()
         _save_materials(mdf)
+
+    if RAG_STORAGE_BACKEND == "postgres":
+        try:
+            from app.storage.postgres_store import delete_course_chunks
+
+            delete_course_chunks(prof_id=prof_id, course_id=course_id)
+        except Exception:
+            pass
 
 
 # -----------------------------
@@ -259,8 +271,9 @@ def rebuild_index_for_course(prof_id: str, course_id: str) -> int:
 
     all_chunks: List[Dict] = []
     for item in all_pages:
-        chunks = chunk_text(
-            text=item["text"],
+        blocks = parse_text_to_blocks(item["text"])
+        chunks = chunk_blocks(
+            blocks=blocks,
             course_id=item["course_id"],
             doc_name=item["doc_name"],
             source_type=item["source_type"],
@@ -272,7 +285,23 @@ def rebuild_index_for_course(prof_id: str, course_id: str) -> int:
         return 0
 
     build_tfidf_index(all_chunks=all_chunks, prof_id=prof_id, course_id=course_id)
-    build_embeddings_index(prof_id=prof_id, course_id=course_id)
+    build_bm25_index(all_chunks=all_chunks, prof_id=prof_id, course_id=course_id)
+    _model, _index, embeddings, df_chunks = build_embeddings_index(
+        prof_id=prof_id, course_id=course_id
+    )
+
+    if RAG_STORAGE_BACKEND == "postgres":
+        try:
+            from app.storage.postgres_store import upsert_chunks
+
+            upsert_chunks(
+                chunks=df_chunks.to_dict(orient="records"),
+                embeddings=embeddings,
+                prof_id=prof_id,
+                course_id=course_id,
+            )
+        except Exception:
+            pass
     return len(all_chunks)
 
 

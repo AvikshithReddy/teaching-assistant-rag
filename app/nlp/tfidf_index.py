@@ -8,7 +8,7 @@ from scipy import sparse
 from sklearn.feature_extraction.text import TfidfVectorizer
 import joblib
 
-from app.config import DATA_RAW_DIR, CHUNK_SIZE, CHUNK_OVERLAP, get_course_paths
+from app.config import DATA_RAW_DIR, CHUNK_SIZE_TOKENS, CHUNK_OVERLAP_TOKENS, get_course_paths
 from app.ingestion.preprocess import preprocess_for_tfidf
 
 
@@ -32,14 +32,14 @@ def chunk_text(
     page_or_slide: int,
 ) -> List[Dict]:
     """
-    Split text into overlapping chunks.
+    Split text into overlapping chunks (word-count proxy for tokens).
     """
     words = text.split()
     chunks: List[Dict] = []
     start = 0
 
     while start < len(words):
-        end = start + CHUNK_SIZE
+        end = start + CHUNK_SIZE_TOKENS
         chunk_words = words[start:end]
         if not chunk_words:
             break
@@ -57,7 +57,7 @@ def chunk_text(
 
         if end >= len(words):
             break
-        start = end - CHUNK_OVERLAP
+        start = end - CHUNK_OVERLAP_TOKENS
 
     return chunks
 
