@@ -1,100 +1,144 @@
- AI Teaching Assistant — Advanced RAG System
+# AI Teaching Assistant — RAG System
 
-An end-to-end, production-grade AI Teaching Assistant that enables professors to upload course materials and allows students to ask intelligent, context-aware questions grounded strictly in course content.
+An end-to-end AI Teaching Assistant that enables professors to upload course materials and students to ask intelligent, context-aware questions grounded strictly in course content.
 
-Built using Retrieval-Augmented Generation (RAG) with hybrid retrieval, per-student memory, and strong data isolation across professors, courses, and students.
+Built with a decoupled **FastAPI backend** + **React frontend**, hybrid RAG retrieval, per-student memory, and strict data isolation across professors, courses, and students.
 
-⸻
+---
 
-🚀 Key Features
+## Architecture
 
-👩‍🏫 Professor Portal
-	•	Create and manage multiple courses
-	•	Upload PDFs and PPTX course materials
-	•	Automatic duplicate file detection
-	•	Build/rebuild vector indexes
-	•	Inspect indexed chunks for transparency
-	•	Delete materials and courses safely
+```
+frontend/          React 18 + Vite + Tailwind CSS  (port 3000)
+backend/           FastAPI + uvicorn                (port 8000)
+  app/             RAG modules (ingestion, nlp, retrieval, qa)
+  auth/            JWT + bcrypt authentication
+  routers/         REST API endpoints
+  helpers.py       Course/material/index helpers
+docker-compose.yml Orchestrates both services
+data/              Persisted indexes, uploads, chat logs (volume-mounted)
+```
 
-🎓 Student Portal
-	•	Select courses across multiple professors
-	•	Ask natural-language questions
-	•	Answers grounded only in course materials
-	•	Citations with page/slide references
-	•	Persistent chat history per student per course
-	•	Context-aware follow-up questions (LLM-style chat)
+---
 
-⸻
+## Features
 
-🧠 Core AI Capabilities
-	•	Hybrid Retrieval
-	•	TF-IDF (lexical)
-	•	Dense embeddings (semantic)
-	•	Keyword fallback for recall
-	•	Optional Cross-Encoder Reranking
-	•	Context-bounded LLM responses
-	•	Per-student memory
-	•	Strict hallucination prevention
-	•	Course-isolated vector stores
+**Professor portal**
+- Create and manage courses
+- Upload PDF and PPTX course materials
+- Build / rebuild vector indexes
+- Monitor index status and chunk count
 
+**Student portal**
+- Select from available courses
+- Ask natural-language questions answered strictly from course materials
+- Source citations with page/slide references
+- Persistent chat history per student per course
 
+**AI pipeline**
+- Hybrid retrieval: BM25 + TF-IDF + FAISS dense embeddings
+- Reciprocal Rank Fusion (RRF) for result merging
+- Optional cross-encoder reranking
+- Grounding validation to prevent hallucinations
+- Multi-part question decomposition
 
-┌───────────────┐
-│ Course Files  │  (PDF, PPTX)
-└──────┬────────┘
-       ↓
-┌─────────────────────┐
-│ Ingestion Pipeline  │
-│  - PDF Loader       │
-│  - PPTX Loader      │
-│  - Preprocessing    │
-└──────┬──────────────┘
-       ↓
-┌────────────────────────────┐
-│ Chunking + Metadata        │
-│  - Page / Slide numbers    │
-│  - Source tracking         │
-└──────┬─────────────────────┘
-       ↓
-┌────────────────────────────┐
-│ Hybrid Index                │
-│  - TF-IDF Matrix            │
-│  - FAISS Vector Index       │
-└──────┬─────────────────────┘
-       ↓
-┌────────────────────────────┐
-│ RAG Pipeline                │
-│  - Hybrid retrieval         │
-│  - Reranking (optional)     │
-│  - LLM answer generation    │
-└──────┬─────────────────────┘
-       ↓
-┌────────────────────────────┐
-│ Student Chat Experience     │
-│  - Persistent memory        │
-│  - Context-aware answers    │
-│  - Source citations         │
-└────────────────────────────┘
+---
 
+## Quick Start (Docker)
 
+**Prerequisites:** Docker Desktop, an OpenAI API key.
 
-
-git clone https://github.com/<your-username>/teaching-assistant-rag.git
+```bash
+git clone https://github.com/AvikshithReddy/teaching-assistant-rag.git
 cd teaching-assistant-rag
 
+cp .env.example .env
+# Edit .env — set OPENAI_API_KEY and a strong JWT_SECRET
 
+docker compose up -d --build
+```
 
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API docs: http://localhost:8000/docs
+
+---
+
+## Usage
+
+1. Open http://localhost:3000
+2. Register as **professor** → create a course → upload PDFs/PPTX → rebuild index
+3. Register as **student** → select a course → ask questions
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in:
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | Your OpenAI API key |
+| `JWT_SECRET` | Random secret for signing JWTs (use a long random string) |
+| `RAG_STORAGE_BACKEND` | `local` (default) |
+
+---
+
+## Local Development (without Docker)
+
+**Backend**
+```bash
+cd backend
 python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
+source .venv/bin/activate   # macOS/Linux
+# .venv\Scripts\activate    # Windows
 
-
+pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
+cp ../.env.example ../.env  # fill in values
+uvicorn main:app --reload --port 8000
+```
 
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL_NAME=gpt-4o-mini   # or any supported model
+**Frontend**
+```bash
+cd frontend
+npm install
+VITE_API_URL=http://localhost:8000 npm run dev
+```
 
+---
 
+## Project Structure
 
-streamlit run main_app.py
+```
+backend/
+  main.py                   FastAPI entry point
+  helpers.py                Course/material/index helpers
+  auth/
+    jwt.py                  Token creation and verification
+    password.py             bcrypt hashing
+    users.py                SQLite user store (data/users.db)
+  routers/
+    auth.py                 POST /auth/register, /auth/login, GET /auth/me
+    courses.py              Professor/student course CRUD
+    materials.py            File upload and management
+    index.py                Index rebuild and status
+    chat.py                 Student Q&A and history
+  app/
+    config.py               Paths and settings
+    ingestion/              PDF/PPTX loaders, chunking, preprocessing
+    nlp/                    BM25, TF-IDF, embeddings, reranker
+    retrieval/              Retriever with RRF fusion
+    qa/                     RAG pipeline, chat memory
 
+frontend/
+  src/
+    api/client.ts           Axios instance + typed API calls
+    context/AuthContext.tsx JWT auth state + AuthGuard HOC
+    pages/                  LoginPage, ProfessorPage, StudentPage
+    components/
+      ui/                   Button, Input, Badge, Card, Spinner, Alert
+      professor/            CourseManager, MaterialUpload, IndexStatus
+      student/              ChatWindow, SourceCard, CourseSelector
+```
