@@ -8,3 +8,5 @@ __pycache__
 data/index/*
 data/raw/*
 data/processed/*
+frontend/node_modules/
+frontend/dist/
