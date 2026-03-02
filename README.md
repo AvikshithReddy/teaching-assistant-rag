@@ -1,4 +1,4 @@
-# AI Teaching Assistant — RAG System
+# AI Teaching Assistant | RAG System
 
 An end-to-end AI Teaching Assistant that enables professors to upload course materials and students to ask intelligent, context-aware questions grounded strictly in course content.
 
@@ -142,3 +142,4 @@ frontend/
       professor/            CourseManager, MaterialUpload, IndexStatus
       student/              ChatWindow, SourceCard, CourseSelector
 ```
+
