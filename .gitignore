@@ -25,6 +25,11 @@ data/
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
 
 frontend/node_modules/
 frontend/dist/
